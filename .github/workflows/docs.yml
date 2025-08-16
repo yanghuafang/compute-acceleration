@@ -1,0 +1,80 @@
+# Build the Doxygen API reference, and publish it from main.
+#
+# The build runs on pull requests too, so a broken reference is caught before it
+# merges; this is the only place the site is built. Publishing is a separate job
+# for two reasons: it is the only step that needs a deployment token, and it
+# must not run for a pull request, least of all one from a fork.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a main run: it may be mid-publish, and a half-uploaded site is
+  # worse than a stale one. The github-pages environment serialises deploys.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No --build-only: the lint set is what carries Doxygen and graphviz.
+      - name: Install dependencies
+        run: scripts/install-deps-ubuntu.sh
+
+      # --strict: Doxygen exits 0 after warning about a broken reference, so a
+      # check on its exit status would publish a rotting site. docs.sh gates on
+      # the warning log instead. Locally it warns and still emits a readable
+      # site, because a docs build that refuses to produce output during a
+      # refactor is one nobody runs.
+      # ACCEL_BUILD_DIR is set per-step, not on the job: the `runner` context is
+      # not available in a job-level `env:`, and using it there is a startup
+      # failure with no log to explain it. Set here so the upload path below
+      # names the same directory.
+      - name: Doxygen
+        env:
+          ACCEL_BUILD_DIR: ${{ runner.temp }}/build
+        run: scripts/docs.sh --strict
+
+      # Only what publish will consume. On a pull request the site is built and
+      # checked but never deployed, so uploading it would be megabytes moved for
+      # an artifact nothing reads.
+      - name: Upload site
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/build/docs/html
+
+  deploy:
+    name: deploy
+    # main only, and never for a pull request: a fork must not be able to
+    # publish. The build job above still gates every pull request.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Here rather than in build: nothing in a Doxygen tree reads its outputs,
+      # it is a no-op on a pull request, and enabling Pages is what needs the
+      # write scope this job holds and the build job deliberately does not.
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

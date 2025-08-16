@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-debug",
+      "type": "shell",
+      "command": "./scripts/build-accel.sh --type Debug --build-dir ../compute-acceleration-build/debug",
+      "problemMatcher": ["$gcc"],
+      "group": "build"
+    }
+  ]
+}

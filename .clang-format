@@ -1,0 +1,63 @@
+BasedOnStyle: Google
+IndentWidth: 2
+ColumnLimit: 80
+Standard: c++17
+
+# Pointers and references bind to the type: `float* p`, `const GemmShape& s`.
+#
+# Restated rather than inherited, because this is the one Google default that
+# recently changed meaning. Until LLVM 21 the Google style set
+# DerivePointerAlignment: true, which ignores PointerAlignment and instead
+# copies whichever spelling a file already uses -- so `float *p` was preserved
+# wherever it appeared, and `--check` passed on both spellings. LLVM 21 turned
+# it off to match the style guide.
+#
+# Verified here: clang-format 18 reports true for --style=Google, 22 reports
+# false. Which behaviour applies therefore depends on the clang-format major,
+# and this repo deliberately does not pin one -- CI runs the distro's on
+# ubuntu-latest while a macOS developer gets Homebrew's, and the two are
+# routinely several majors apart. Setting both options makes the rule the same
+# on either side of that gap.
+#
+# ReferenceAlignment: Pointer means "whatever PointerAlignment says", so the two
+# cannot drift apart.
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# Include order, exactly as the Google C++ Style Guide states it. Priority 0 is
+# clang-format's own slot for the related header -- cpu_gemm.h for cpu_gemm.cc
+# -- so the categories below start at 1:
+#
+#   0. the related header       (automatic)
+#   1. C system headers         <unistd.h>, <sys/stat.h>
+#   2. C++ standard library     <cstddef>, <vector>
+#   3. other libraries          <cuda_runtime.h>, <omp.h>
+#   4. this project             "cuda/device_buffer.cuh"
+#
+# The C system headers are enumerated rather than matched as <name.h>, because
+# <cuda_runtime.h> is also <name.h>. Matching by shape would need the
+# third-party rule listed first to win -- clang-format takes the first matching
+# regex -- which leaves the list ordered by specificity while the priorities run
+# in a different order. Enumerating makes the rules disjoint, so list order and
+# priority order agree and neither has to be read against the other.
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:    '^<(assert|ctype|errno|fcntl|float|inttypes|limits|locale|math|setjmp|signal|stdarg|stddef|stdint|stdio|stdlib|string|termios|time|unistd|wchar|wctype)\.h>'
+    Priority: 1
+  - Regex:    '^<sys/[a-z_]+\.h>'
+    Priority: 1
+  - Regex:    '^<[a-z0-9_]+>'
+    Priority: 2
+  - Regex:    '^<.*>'
+    Priority: 3
+  - Regex:    '^".*"'
+    Priority: 4
+
+# Priority 0 is assigned by matching the file being formatted against its own
+# includes, and clang-format only attempts that for extensions it recognises as
+# source -- .c, .cc, .cpp and friends, not .cu. Without this, Regroup sorts
+# `#include "cuda/sum_reduction.cuh"` alphabetically into the project block of
+# sum_reduction.cu instead of keeping it first. Compiling a translation unit
+# whose own header comes first is what proves that header is self-contained.
+IncludeIsMainSourceRegex: '(\.cu|\.cuh)$'

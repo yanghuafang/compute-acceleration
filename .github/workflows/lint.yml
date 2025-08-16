@@ -1,0 +1,72 @@
+# Formatting and clang-tidy, as two jobs.
+#
+# Separate from build.yml because of cadence: both answer in under a minute and
+# neither needs a compiled tree -- clang-tidy wants the compile database, which
+# CMake writes at generate time, so a configure is enough. A formatting slip
+# should not wait behind a macOS build to be reported.
+#
+# Two jobs rather than one: clang-format needs nothing but the sources, while
+# clang-tidy needs a configure, so a formatting slip reports without waiting for
+# CMake -- and when both are unhappy you get both answers, not just the first.
+#
+# The Doxygen build is not here. It lives in docs.yml, which gates pull requests
+# and publishes from main, so the site is built once per run rather than once
+# here and again there.
+#
+# One platform: every check here is host-independent, because the clang major is
+# pinned in scripts/build-env.sh and both install scripts honour it.
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Not on main: a merge queue moving faster than the job would leave the branch
+  # with no completed lint run at all.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No --build-only: clang-format and clang-tidy are the point of this job.
+      - name: Install dependencies
+        run: scripts/install-deps-ubuntu.sh
+
+      - name: clang-format
+        run: scripts/format.sh --check
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No --build-only: clang-format and clang-tidy are the point of this job.
+      - name: Install dependencies
+        run: scripts/install-deps-ubuntu.sh
+
+      # Configure only. clang-tidy reads compile_commands.json, which CMake
+      # writes when it generates; nothing has to be compiled to lint it. The
+      # database must be complete, though -- a toolchain CMake fails to detect
+      # drops its targets, and their sources then have no compile command.
+      - name: Configure
+        run: cmake --preset release
+
+      - name: clang-tidy
+        run: scripts/tidy.sh

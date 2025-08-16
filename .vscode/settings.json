@@ -1,0 +1,21 @@
+{
+  "[cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format"
+  },
+  "[cuda-cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format"
+  },
+  "clang-format.fallbackStyle": "Google",
+  "clang-format.language.cpp.enable": true,
+  "clang-format.style": "file",
+  "editor.formatOnSave": true,
+  "editor.minimap.enabled": false,
+  "editor.renderWhitespace": "all",
+  "editor.rulers": [80],
+  "editor.tabSize": 2,
+  "files.associations": {
+    "*.cuh": "cuda-cpp"
+  },
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/../compute-acceleration-build/release/compile_commands.json"
+}

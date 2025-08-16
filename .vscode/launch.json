@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug a test suite",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/../compute-acceleration-build/debug/bin/test_cpu_gemm",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-debug"
+    },
+    {
+      "name": "Debug a benchmark (small shape)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/../compute-acceleration-build/debug/bin/bench_omp_gemm_scaling",
+      "args": ["--m=128", "--k=64", "--n=128", "--threads=2"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-debug"
+    }
+  ]
+}

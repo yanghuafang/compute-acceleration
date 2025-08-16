@@ -1,0 +1,74 @@
+# Prove src/cuda still compiles and links.
+#
+# Its own file rather than a leg of the build matrix: the install steps are
+# unlike any other job's, the toolkit version is pinned here and nowhere else,
+# and it takes long enough that sharing a concurrency group with the fast jobs
+# would hold them up. A matrix cell that skips most of what the matrix does is
+# not a matrix cell.
+#
+# No hosted runner has a GPU, so CMAKE_CUDA_ARCHITECTURES cannot be `native` and
+# no kernel runs. The architecture lives in the cuda-ci preset, not here.
+name: CUDA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: nvcc (compile only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # CUDA 13 dropped pre-Turing architectures. The matching sm_86 target
+      # lives in the cuda-ci preset in CMakePresets.json -- bump both together.
+      CUDA_RELEASE: 13-3
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # --build-only: this job compiles and never lints, so it has no use for
+      # clang-format, clang-tidy, Doxygen or graphviz.
+      - name: Install dependencies
+        run: scripts/install-deps-ubuntu.sh --build-only
+
+      - name: Install nvcc
+        working-directory: ${{ runner.temp }}
+        run: |
+          # Derived from the runner's own release rather than hardcoded: the
+          # pinned image will be bumped eventually and a stale repo path 404s
+          # the day it is.
+          repo="ubuntu$(. /etc/os-release && echo "${VERSION_ID//./}")"
+          curl -fsSLO "https://developer.download.nvidia.com/compute/cuda/repos/${repo}/x86_64/cuda-keyring_1.1-1_all.deb"
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          # cudart is all this project links; the full toolkit is gigabytes of
+          # libraries it never calls.
+          sudo apt-get install -y --no-install-recommends \
+            "cuda-nvcc-${CUDA_RELEASE}" "cuda-cudart-dev-${CUDA_RELEASE}"
+          cuda_bin="/usr/local/cuda-${CUDA_RELEASE/-/.}/bin"
+          echo "${cuda_bin}" >> "${GITHUB_PATH}"
+          "${cuda_bin}/nvcc" --version
+
+      - name: Build
+        run: scripts/build-accel.sh --preset cuda-ci
+
+      # --require-cuda asks what was *built*, and the preset's label filter
+      # decides what *runs*. Without the guard a failed toolkit install passes
+      # as an ordinary host build; without the filter the device suite would
+      # self-skip on a GPU-less runner and look like it had passed.
+      #
+      # No --require-openmp: build.yml asserts that on this same image and
+      # compiler, and this job is answerable for the CUDA layer only.
+      - name: Test (host suites)
+        run: scripts/run-tests.sh --no-build --preset cuda-ci-hostonly --require-cuda

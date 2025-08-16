@@ -1,0 +1,94 @@
+# Build and test on every supported compiler.
+#
+# The matrix is for the compilers, not the distributions: a developer builds
+# with one of them, and the presets' ACCEL_WERROR catches what the others would
+# have said. --require-openmp is what stops an undetected runtime from turning
+# into a quietly smaller, still-green test run.
+#
+# Every configuration is a preset in CMakePresets.json. Nothing below passes a
+# compiler flag, a build type or a -D of any kind, so `cmake --workflow --preset
+# release` reproduces this job exactly.
+#
+# Deliberately no `paths:` filter. A workflow skipped by a path filter never
+# reports, and a required check that never reports blocks the pull request
+# forever. Use dorny/paths-filter inside a job that always runs if this ever
+# needs to get cheaper.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.platform }} / ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # Report every platform's result even if one fails.
+      fail-fast: false
+      matrix:
+        include:
+          # Runner images are pinned: `ubuntu-latest` moves without notice, and
+          # a matrix that silently changes what it tests is worse than one that
+          # is a release behind.
+          - os: ubuntu-24.04
+            platform: Ubuntu
+            toolchain: gcc-13
+            cc: gcc-13
+            cxx: g++-13
+          - os: ubuntu-24.04
+            platform: Ubuntu
+            toolchain: clang-20
+            cc: clang-20
+            cxx: clang++-20
+          # Not Apple Clang: install-deps-macos.sh installs the Homebrew keg and
+          # build-env.sh puts it first on PATH, because Xcode ships neither
+          # clang-format nor clang-tidy nor an OpenMP runtime. Named for what it
+          # actually runs.
+          - os: macos-15
+            platform: macOS
+            toolchain: llvm@20
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The install scripts are the ones a contributor runs, so a dependency CI
+      # needs and they do not install is a bug in the scripts, not a patch here.
+      - name: Install dependencies
+        run: |
+          case "${RUNNER_OS}" in
+            Linux) scripts/install-deps-ubuntu.sh --build-only ;;
+            macOS) scripts/install-deps-macos.sh  --build-only ;;
+            *)
+              echo "No install recipe for runner OS '${RUNNER_OS}'." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build
+        run: scripts/build-accel.sh --preset release
+
+      # release-hostonly excludes the `device` label. No hosted runner has a
+      # GPU, and test_cuda_kernels exits zero with a notice when it finds none:
+      # excluding it says so, where letting it self-skip looks like a pass.
+      - name: Test
+        run: scripts/run-tests.sh --no-build --preset release-hostonly --require-openmp
+
+      # The drivers verify their own output, so this covers paths ctest does
+      # not enter.
+      - name: Benchmarks
+        run: scripts/bench.sh --no-build --smoke

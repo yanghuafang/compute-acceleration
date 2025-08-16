@@ -1,0 +1,105 @@
+# Host sanitizer sweep: ASan+UBSan and TSan, as separate jobs.
+#
+# Separate from build.yml because this is the pass most likely to break from a
+# runner-image toolchain bump rather than from a commit -- hence the schedule.
+#
+# ASan and TSan get a job each rather than one job running both in turn: the two
+# runtimes both claim the shadow-memory address ranges and cannot share a
+# binary, so they were already two builds, and running them in parallel halves
+# the wall clock and lets each report its own status. sanitize.sh still runs
+# them in sequence, which is what you want at a terminal.
+#
+# Host code only: compute-sanitizer needs a physical GPU and no hosted runner
+# has one. See docs/Sanitizers.md.
+name: Sanitizers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Monday 06:00 UTC: catch a refreshed image on its own schedule, not inside
+  # someone's pull request.
+  schedule:
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ matrix.platform }} / ${{ matrix.label }}
+    # A fork inherits the cron and would run this weekly forever with nobody
+    # reading the result. Push and pull_request still run everywhere.
+    if: github.event_name != 'schedule' || github.repository == 'yanghuafang/compute-acceleration'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        preset: [asan-ubsan, tsan]
+        include:
+          # `label` is display only. `preset` stays the literal preset name,
+          # because it is what --preset receives; renaming it to read nicely
+          # would mean renaming the preset itself.
+          - preset: asan-ubsan
+            label: ASan + UBSan
+          - preset: tsan
+            label: TSan
+          - os: ubuntu-24.04
+            platform: Ubuntu
+            cc: clang-20
+            cxx: clang++-20
+          - os: macos-15
+            platform: macOS
+            cc: clang
+            cxx: clang++
+          # The test preset differs from the configure preset on macOS only:
+          # LeakSanitizer is unsupported there and detect_leaks=1 aborts every
+          # test, so CMakePresets.json states the value per platform instead of
+          # leaving it to the runtime default. The Ubuntu jobs therefore check
+          # strictly more than the macOS ones.
+          - os: macos-15
+            preset: asan-ubsan
+            test_preset: asan-ubsan-macos
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The install scripts are the ones a contributor runs, so a dependency CI
+      # needs and they do not install is a bug in the scripts, not a patch here.
+      - name: Install dependencies
+        run: |
+          case "${RUNNER_OS}" in
+            Linux) scripts/install-deps-ubuntu.sh --build-only ;;
+            macOS) scripts/install-deps-macos.sh  --build-only ;;
+            *)
+              echo "No install recipe for runner OS '${RUNNER_OS}'." >&2
+              exit 1
+              ;;
+          esac
+
+      # Noble raised vm.mmap_rnd_bits to 32, which ASan runtimes older than
+      # roughly clang 18 cannot map around. clang-20 is unaffected, so this is
+      # here for the day the pin moves backwards rather than forwards.
+      - name: Lower ASLR entropy
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Build
+        run: scripts/build-accel.sh --preset ${{ matrix.preset }}
+
+      # The thread pass drops the OpenMP targets (docs/Sanitizers.md), so green
+      # there does not mean the OpenMP kernels are race-free -- that is what the
+      # multi-thread-count cases in test_omp_kernels are for.
+      - name: Test
+        run: |
+          scripts/run-tests.sh --no-build \
+            --preset "${{ matrix.test_preset || matrix.preset }}"

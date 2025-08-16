@@ -1,0 +1,285 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceParentDir}/${sourceDirName}-build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ACCEL_WERROR": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Default build: CUDA and OpenMP targets when the toolchains are found.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Unoptimised with debug info; same target set as release.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "description": "Optimised with debug info; what the sanitizer presets build on.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "minsizerel",
+      "displayName": "MinSizeRel",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "MinSizeRel"
+      }
+    },
+    {
+      "name": "sanitizer-base",
+      "hidden": true,
+      "inherits": "base",
+      "description": "RelWithDebInfo: -O0 makes an instrumented run slower still, and -O2 with frame pointers keeps stack traces readable. CUDA is off because an ASan host process reports false positives from the driver's own allocations; compute-sanitizer covers device code instead.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ACCEL_CUDA": "OFF",
+        "ACCEL_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "ASan + UBSan",
+      "description": "Covers the OpenMP kernels. LeakSanitizer rides along on Linux only.",
+      "inherits": "sanitizer-base",
+      "cacheVariables": {
+        "ACCEL_ASAN": "ON",
+        "ACCEL_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "TSan",
+      "description": "OpenMP is off: TSan cannot see an OpenMP barrier unless the runtime carries LIBOMP_TSAN_SUPPORT, and neither Homebrew libomp nor libgomp does, so every worker write reports as a race. Cannot share a binary with ASan -- separate preset, separate build tree.",
+      "inherits": "sanitizer-base",
+      "cacheVariables": {
+        "ACCEL_TSAN": "ON",
+        "ACCEL_OPENMP": "OFF"
+      }
+    },
+    {
+      "name": "cuda",
+      "displayName": "CUDA (native arch)",
+      "description": "Probes the installed GPUs. Needs a device present at configure time.",
+      "inherits": "release",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "native"
+      }
+    },
+    {
+      "name": "cuda-ci",
+      "displayName": "CUDA (sm_86, compile only)",
+      "description": "No hosted runner has a GPU, so the architecture cannot be probed. sm_86 is the Ampere target the published numbers were measured on.",
+      "inherits": "release",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "86"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "asan-ubsan",
+      "configurePreset": "asan-ubsan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "cuda",
+      "configurePreset": "cuda"
+    },
+    {
+      "name": "cuda-ci",
+      "configurePreset": "cuda-ci"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "OMP_NUM_THREADS": "4"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "test-base",
+      "configurePreset": "release"
+    },
+    {
+      "name": "release-hostonly",
+      "description": "Excludes the device suite. Hosted CI runners have no GPU, and test_cuda_kernels exits zero with a notice when it finds none -- an explicit exclusion says that, a self-skip looks like a pass.",
+      "inherits": "test-base",
+      "configurePreset": "release",
+      "filter": {
+        "exclude": {
+          "label": "device"
+        }
+      }
+    },
+    {
+      "name": "cuda-ci-hostonly",
+      "description": "The cuda-ci tree, host suites only. The device suite is built -- that is what the job proves -- but no hosted runner can run it.",
+      "inherits": "test-base",
+      "configurePreset": "cuda-ci",
+      "filter": {
+        "exclude": {
+          "label": "device"
+        }
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "test-base",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "asan-ubsan",
+      "description": "Linux: LeakSanitizer is supported, so leaks are failures.",
+      "inherits": "test-base",
+      "configurePreset": "asan-ubsan",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=0:print_stats=0",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "asan-ubsan-macos",
+      "description": "LeakSanitizer is unsupported on macOS/arm64; detect_leaks=1 aborts every test. Set explicitly rather than left to the platform default.",
+      "inherits": "test-base",
+      "configurePreset": "asan-ubsan",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=0:print_stats=0",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "test-base",
+      "configurePreset": "tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "release"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        },
+        {
+          "type": "test",
+          "name": "release"
+        }
+      ]
+    },
+    {
+      "name": "asan-ubsan",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "asan-ubsan"
+        },
+        {
+          "type": "build",
+          "name": "asan-ubsan"
+        },
+        {
+          "type": "test",
+          "name": "asan-ubsan"
+        }
+      ]
+    },
+    {
+      "name": "asan-ubsan-macos",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "asan-ubsan"
+        },
+        {
+          "type": "build",
+          "name": "asan-ubsan"
+        },
+        {
+          "type": "test",
+          "name": "asan-ubsan-macos"
+        }
+      ]
+    },
+    {
+      "name": "tsan",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "tsan"
+        },
+        {
+          "type": "build",
+          "name": "tsan"
+        },
+        {
+          "type": "test",
+          "name": "tsan"
+        }
+      ]
+    }
+  ]
+}

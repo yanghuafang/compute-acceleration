@@ -1,0 +1,196 @@
+# clang-tidy configuration for compute-acceleration. Run with scripts/tidy.sh.
+#
+# The check list is curated rather than "all of readability-* and modernize-*",
+# because several upstream checks fight this project's subject matter: numeric
+# kernels whose index names, loop nests and literal constants are the domain,
+# not accidents of style. Each disabled family is listed with its reason, so the
+# exclusions can be re-argued rather than rediscovered.
+#
+# Scope note: only .cc translation units are analyzed. clang-tidy cannot parse
+# an nvcc command line, so src/cuda has no entry it can use; that half is
+# covered by compute-sanitizer and the CUDA test suite instead. See
+# docs/Sanitizers.md.
+#
+# Deliberately NOT enabled:
+#
+#   google-explicit-constructor
+#       Span's converting constructors are the feature. It stands in for C++20
+#       std::span, which converts implicitly from a container and from Span<T>
+#       to Span<const T>; marking those explicit would mean spelling out
+#       Span<const float>(v) at every one of the ~90 call sites and would make
+#       the type worse than the one it substitutes for.
+#   modernize-use-trailing-return-type
+#       Would rewrite every kernel signature into `auto gemmIkj(...) -> void`.
+#       The return type is not what these APIs are about, and the form is
+#       harder to skim for a reader here to learn about memory access order.
+#   readability-identifier-length
+#       Flags i, j, k, l, m, n, a, b, c. Those are the names the linear-algebra
+#       literature uses for exactly these quantities; renaming them to satisfy
+#       a length threshold would make the kernels harder to match against a
+#       textbook, not easier.
+#   readability-magic-numbers
+#       Nearly every hit is a tile size, a tolerance, or a ramp scale, where
+#       the literal beside its comment is clearer than a named constant would
+#       be. The ones that are shared already are constants: kDefaultTileSize,
+#       kSumLanes, kReductionBlockSize.
+#   readability-function-cognitive-complexity
+#       A blocked GEMM is a six-deep loop nest by definition. Splitting it to
+#       satisfy a threshold would scatter the one thing the file exists to show.
+#   bugprone-easily-swappable-parameters
+#       Fires on every (a, b, c, shape) kernel signature, which is the BLAS
+#       shape this project is deliberately mirroring.
+#   misc-const-correctness
+#       Applied by hand throughout, but not enforced: the check cannot tell a
+#       value from a scoped guard, and the accumulator locals in the inner
+#       loops are mutated by construction.
+#   modernize-use-nodiscard
+#       Wants [[nodiscard]] on every const member of GemmShape and Span. Those
+#       are arithmetic accessors called inside expressions; the attribute would
+#       be 30 lines of annotation buying nothing.
+#   readability-math-missing-parentheses
+#       Every one of its 13 findings is a row-major index — `a[i * k + l]`,
+#       `c[i * n + j]` — or the LCG in the test operand generator. That
+#       expression is the canonical spelling of "row i, column j of a row-major
+#       matrix"; writing `a[(i * k) + l]` obscures the one idiom a reader needs
+#       to recognise on sight, to guard against a precedence mistake C has not
+#       permitted since 1978.
+#   bugprone-throwing-static-initialization (49)
+#       One per TEST_CASE. The Registrar constructor pushes onto a vector, so
+#       static init can throw std::bad_alloc uncatchably -- true, and the only
+#       available response in a test binary is to terminate, which is what
+#       already happens.
+#   bugprone-macro-parentheses (1)
+#       Wants `&(TestName)` in TEST_CASE. The same parameter is token-pasted
+#       into `registrar_##TestName`, where parentheses are a syntax error.
+#   cppcoreguidelines-pro-bounds-*
+#       The whole point of Span is that extents are validated once at the
+#       boundary so the inner loops can index without per-element checks. These
+#       checks flag exactly that design.
+#
+# == The half of the style guide that is not in this file ==
+#
+# Layout is clang-format's, not clang-tidy's, and no check here substitutes for
+# it. Brace placement, pointer spelling (`float* p`), indent width, column limit
+# and include order are all settings in .clang-format; a rule missing from that
+# file is unenforced no matter what is added below. Two of them are stated
+# explicitly there rather than inherited from Google, because the upstream
+# defaults moved -- the comments there say which and why.
+#
+# What is left for this file is the half clang-format cannot see: what things
+# are named, and which constructs the guide rules out.
+#
+# == Bug-hunting ==
+#
+# bugprone-* and clang-analyzer-* are enabled. They do not replace the
+# sanitizers, which cover host code at runtime on the paths the tests actually
+# take; these cover paths the tests do not reach, and cost a slower run, which
+# is why tidy.sh runs on one CI platform. Neither reaches src/cuda: clang-tidy
+# cannot parse an nvcc command line, so compute-sanitizer remains the only
+# check on device code.
+
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cppcoreguidelines-init-variables,
+  modernize-deprecated-headers,
+  modernize-use-auto,
+  modernize-use-bool-literals,
+  modernize-use-default-member-init,
+  modernize-use-equals-default,
+  modernize-use-nullptr,
+  modernize-use-override,
+  performance-avoid-endl,
+  performance-inefficient-vector-operation,
+  performance-trivially-destructible,
+  readability-const-return-type,
+  readability-container-size-empty,
+  readability-convert-member-functions-to-static,
+  readability-else-after-return,
+  readability-implicit-bool-conversion,
+  readability-make-member-function-const,
+  readability-named-parameter,
+  readability-non-const-parameter,
+  readability-qualified-auto,
+  readability-redundant-declaration,
+  readability-redundant-member-init,
+  readability-redundant-string-cstr,
+  readability-simplify-boolean-expr,
+  readability-identifier-naming,
+  readability-inconsistent-declaration-parameter-name,
+  readability-redundant-control-flow,
+  readability-static-definition-in-anonymous-namespace,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-macro-parentheses,
+  -bugprone-throwing-static-initialization
+
+# Headers are analyzed through the .cc files that include them. .cuh is absent
+# on purpose: no .cc includes one, and clang-tidy has no CUDA command line to
+# parse them with.
+HeaderFilterRegex: '(src|tests|benchmarks)/.*\.h$'
+
+WarningsAsErrors: ''
+FormatStyle: file
+
+# modernize-use-default-member-init writes `T* p{nullptr}` by default. Every
+# member initializer already in this tree uses assignment, so pin the option
+# rather than let the check introduce a second spelling.
+CheckOptions:
+  modernize-use-default-member-init.UseAssignment: true
+
+  # Google naming, mechanically. Formatting rules -- `T* p` over `T *p`, the
+  # brace on the same line -- are clang-format's, not this file's; see
+  # PointerAlignment and the Google base style in .clang-format.
+  #
+  # MacroDefinitionCase is unset on purpose: the only macros here are include
+  # guards, and the check rejects ACCEL_CORE_SPAN_H_ as not UPPER_CASE over the
+  # trailing underscore the style guide itself prescribes.
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.EnumConstantPrefix: k
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TypedefCase: CamelCase
+  readability-identifier-naming.NamespaceCase: lower_case
+  readability-identifier-naming.FunctionCase: CamelCase
+  readability-identifier-naming.MethodCase: CamelCase
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.PublicMemberCase: lower_case
+  readability-identifier-naming.PrivateMemberCase: lower_case
+  readability-identifier-naming.PrivateMemberSuffix: _
+  readability-identifier-naming.ClassConstantCase: CamelCase
+  readability-identifier-naming.ClassConstantPrefix: k
+  readability-identifier-naming.GlobalConstantCase: CamelCase
+  readability-identifier-naming.GlobalConstantPrefix: k
+  readability-identifier-naming.ConstexprVariableCase: CamelCase
+  readability-identifier-naming.ConstexprVariablePrefix: k
+
+  # main() is spelled by the language.
+  readability-identifier-naming.FunctionIgnoredRegexp: '^main$'
+
+  # The guide allows accessors and mutators to be named like variables, which
+  # the check cannot recognise on its own: GemmShape::is_valid(),
+  # a_elements(), CliOptions::has(). Any lower_case method is therefore
+  # permitted; a genuinely mis-cased one such as computeStuff still reports.
+  readability-identifier-naming.MethodIgnoredRegexp: '^[a-z][a-z0-9_]*$'
+
+  # Macros are UPPER_CASE, except the include guards: the guide's own guard
+  # convention ends in an underscore, which this check rejects as a trailing
+  # separator, so every header would report its own guard. The pattern is the
+  # full guard shape rather than a bare `_H_$`, so it cannot quietly excuse an
+  # unrelated macro. CUDA_CHECK, TEST_CASE and the CHECK_* family are checked.
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  readability-identifier-naming.MacroDefinitionIgnoredRegexp: '^ACCEL_[A-Z0-9_]+_H_$'
+
+  # Every finding was inside CHECK_TRUE(), which expands `CHECK_TRUE(a || b)`
+  # to `if (!(a || b))`. Rewriting the assertion to satisfy a transformation of
+  # code nobody wrote makes the test harder to read.
+  readability-simplify-boolean-expr.IgnoreMacros: true
+
+  # Span stands in for C++20 std::span and mirrors its member typedefs, which
+  # generic code and range-for expect by these exact names. Enumerated rather
+  # than a lower_case wildcard, so an alias that merely forgot its case is
+  # still reported.
+  readability-identifier-naming.TypeAliasIgnoredRegexp: '^(element_type|value_type|size_type|difference_type|pointer|const_pointer|reference|const_reference|iterator|const_iterator)$'

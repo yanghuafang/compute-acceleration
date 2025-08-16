@@ -1,0 +1,63 @@
+# Doxygen configuration for compute-acceleration. Run with scripts/docs.sh.
+#
+# Only the settings that differ from Doxygen's defaults are listed, each with
+# its reason. Run `doxygen -x docs/doxygen/Doxyfile` to see the full effective
+# configuration.
+
+PROJECT_NAME           = compute-acceleration
+PROJECT_BRIEF          = "GEMM and sum reduction across serial, OpenMP and CUDA"
+
+# Beside the build tree, for the same reason object files go there: nothing
+# generated belongs in the checkout. Taken from the environment rather than
+# hardcoded, because the build root derives from the checkout's own directory
+# name; scripts/docs.sh exports it.
+OUTPUT_DIRECTORY       = $(ACCEL_DOCS_DIR)
+
+INPUT                  = src docs/doxygen/ApiMainPage.md
+USE_MDFILE_AS_MAINPAGE = docs/doxygen/ApiMainPage.md
+
+# So a page reads "cpu/cpu_gemm.h" rather than an absolute path.
+STRIP_FROM_PATH        = src
+RECURSIVE              = YES
+
+# .cuh and .cu are included: Doxygen parses them as C++ and the CUDA headers
+# carry as much of the ownership and launch-contract prose as the host ones.
+FILE_PATTERNS          = *.h *.cc *.cuh *.cu *.md
+EXTENSION_MAPPING      = cuh=C++ cu=C++
+
+# NO, deliberately. With EXTRACT_ALL the site fills with undocumented entities
+# and WARN_IF_UNDOCUMENTED has nothing left to say; the point of the warning log
+# is to find declarations whose prose is missing or stale.
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = YES
+HIDE_UNDOC_MEMBERS     = YES
+HIDE_UNDOC_CLASSES     = YES
+
+# Google's comment style is // rather than a Doxygen-specific marker, so the
+# extraction has to accept plain // blocks; AUTOBRIEF then makes the first
+# sentence the brief without an explicit @brief tag.
+JAVADOC_AUTOBRIEF      = YES
+MULTILINE_CPP_IS_BRIEF = NO
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+
+# Collaboration diagrams are the one thing a header cannot show: which layer
+# reaches into which. DIRECTORY_GRAPH is off because with four directories it
+# says less than the layout table in docs/Architecture.md.
+HAVE_DOT               = YES
+UML_LOOK               = YES
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DIRECTORY_GRAPH        = NO
+
+GENERATE_LATEX         = NO
+GENERATE_HTML          = YES
+
+# Doxygen exits 0 after warning about a broken reference or a stale parameter
+# name, so scripts/docs.sh gates on this log instead of on the exit status.
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+WARN_LOGFILE           = $(ACCEL_DOCS_DIR)/doxygen-warnings.log
